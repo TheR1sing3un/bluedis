@@ -4,6 +4,7 @@ import (
 	"bluedis/raft"
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"log"
 	"net/rpc"
 	"sync"
@@ -59,7 +60,7 @@ type CommandContext struct {
 	Reply   ApplyNotifyMsg //该command的响应
 }
 
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+func (kv *KVServer) Get(args *GetArgs, reply *GetReply) error {
 	// Your code here.
 	kv.mu.Lock()
 	//defer kv.mu.Unlock()
@@ -74,7 +75,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 			reply.Err = commandContext.Reply.Err
 			reply.Value = commandContext.Reply.Value
 			kv.mu.Unlock()
-			return
+			return nil
 		}
 	}
 	kv.mu.Unlock()
@@ -90,7 +91,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		//kv.mu.Unlock()
-		return
+		return nil
 	}
 	replyCh := make(chan ApplyNotifyMsg, 1)
 	kv.mu.Lock()
@@ -113,10 +114,11 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrTimeout
 	}
 	//5.清除chan
-	go kv.CloseChan(index)
+	go kv.closeChan(index)
+	return nil
 }
 
-func (kv *KVServer) CloseChan(index int) {
+func (kv *KVServer) closeChan(index int) {
 	kv.mu.Lock()
 	//DPrintf("kvserver[%d]: 开始删除通道index: %d\n", kv.me, index)
 	defer kv.mu.Unlock()
@@ -131,7 +133,7 @@ func (kv *KVServer) CloseChan(index int) {
 	DPrintf("kvserver[%d]: 成功删除通道index: %d\n", kv.me, index)
 }
 
-func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error {
 	// Your code here.
 	kv.mu.Lock()
 	//defer kv.mu.Unlock()
@@ -147,7 +149,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			reply.Err = commandContext.Reply.Err
 			DPrintf("kvserver[%d]: CommandId=[%d]==CommandContext.CommandId=[%d] ,直接返回: %v\n", kv.me, args.CommandId, commandContext.Command, reply)
 			kv.mu.Unlock()
-			return
+			return nil
 		}
 	}
 	kv.mu.Unlock()
@@ -163,7 +165,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	//3.若不为leader则直接返回Err
 	if !isLeader {
 		reply.Err = ErrWrongLeader
-		return
+		return nil
 	}
 	replyCh := make(chan ApplyNotifyMsg, 1)
 	kv.mu.Lock()
@@ -184,20 +186,21 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = ErrTimeout
 		DPrintf("kvserver[%d]: 处理请求超时: %v\n", kv.me, op)
 	}
-	go kv.CloseChan(index)
+	go kv.closeChan(index)
+	return nil
 }
 
-func (kv *KVServer) ReceiveApplyMsg() {
+func (kv *KVServer) receiveApplyMsg() {
 	for !kv.killed() {
 		select {
 		case applyMsg := <-kv.applyCh:
 			DPrintf("kvserver[%d]: 获取到applyCh中新的applyMsg=[%v]\n", kv.me, applyMsg)
 			//当为合法命令时
 			if applyMsg.CommandValid {
-				kv.ApplyCommand(applyMsg)
+				kv.applyCommand(applyMsg)
 			} else if applyMsg.SnapshotValid {
 				//当为合法快照时
-				kv.ApplySnapshot(applyMsg)
+				kv.applySnapshot(applyMsg)
 			} else {
 				//非法消息
 				DPrintf("kvserver[%d]: error applyMsg from applyCh: %v\n", kv.me, applyMsg)
@@ -206,7 +209,7 @@ func (kv *KVServer) ReceiveApplyMsg() {
 	}
 }
 
-func (kv *KVServer) ApplyCommand(applyMsg raft.ApplyMsg) {
+func (kv *KVServer) applyCommand(applyMsg raft.ApplyMsg) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	var commonReply ApplyNotifyMsg
@@ -292,8 +295,8 @@ func (kv *KVServer) createSnapshot() []byte {
 	return snapshotData
 }
 
-// ApplySnapshot 被动应用snapshot
-func (kv *KVServer) ApplySnapshot(msg raft.ApplyMsg) {
+// applySnapshot 被动应用snapshot
+func (kv *KVServer) applySnapshot(msg raft.ApplyMsg) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	DPrintf("kvserver[%d]: 接收到leader的快照\n", kv.me)
@@ -319,7 +322,7 @@ func (kv *KVServer) ApplySnapshot(msg raft.ApplyMsg) {
 // about this, but it may be convenient (for example)
 // to suppress debug output from a Kill()ed instance.
 //
-func (kv *KVServer) Kill() {
+func (kv *KVServer) kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
@@ -364,8 +367,33 @@ func StartKVServer(servers []*rpc.Client, me int, persister *raft.Persister, max
 	kv.replyChMap = make(map[int]chan ApplyNotifyMsg)
 	//从快照中恢复数据
 	kv.readSnapshot(kv.rf.GetSnapshot())
-	go kv.ReceiveApplyMsg()
+	go kv.receiveApplyMsg()
 	return kv
+}
+
+func NewKVServer(me int, maxraftstate int) *KVServer {
+	gob.Register(Op{})
+	kv := new(KVServer)
+	kv.me = me
+	kv.maxraftstate = maxraftstate
+	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.clientReply = make(map[int64]CommandContext)
+	kv.kvDataBase = KvDataBase{make(map[string]string)}
+	kv.storeInterface = &kv.kvDataBase
+	kv.replyChMap = make(map[int]chan ApplyNotifyMsg)
+	return kv
+}
+
+func (kv *KVServer) StartServer(persister *raft.Persister, servers []*rpc.Client) {
+	kv.rf = raft.Make(servers, kv.me, persister, kv.applyCh)
+	rpc.RegisterName("Raft", kv.rf)
+	//从快照中恢复数据
+	kv.readSnapshot(kv.rf.GetSnapshot())
+	go kv.receiveApplyMsg()
+	go kv.printData()
+	for !kv.killed() {
+		time.Sleep(5 * time.Second)
+	}
 }
 
 func (kv *KVServer) readSnapshot(snapshot []byte) {
@@ -382,5 +410,14 @@ func (kv *KVServer) readSnapshot(snapshot []byte) {
 		kv.kvDataBase = kvDataBase
 		kv.clientReply = clientReply
 		kv.storeInterface = &kvDataBase
+	}
+}
+
+func (kv *KVServer) printData() {
+	for !kv.killed() {
+		time.Sleep(10 * time.Second)
+		kv.mu.Lock()
+		fmt.Println(kv.kvDataBase.KvData)
+		kv.mu.Unlock()
 	}
 }

@@ -323,7 +323,7 @@ type InstallSnapshotReply struct {
 }
 
 // InstallSnapshot 快照安装的RPC
-func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) error {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer func() {
@@ -332,7 +332,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	//1.判断参数中的term是否小于currentTerm
 	if args.Term < rf.currentTerm {
 		//该快照为旧的,直接丢弃并返回
-		return
+		return nil
 	}
 	DPrintf("id[%d].state[%v].term[%d]: 接收到leader[%d]的快照:lastLogIndex[%d],lastLogTerm[%d]\n", rf.me, rf.state, rf.currentTerm, args.LeaderId, args.LastIncludedIndex, args.LastIncludedTerm)
 	//2.若参数中term大于currentTerm
@@ -348,7 +348,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	//5.若快照过期
 	if args.LastIncludedIndex <= rf.commitIndex {
 		DPrintf("id[%d].state[%v].term[%d]: leader[%d]的快照:lastLogIndex=[%d],lastLogTerm=[%d]已过期,commitIndex=[%d]\n", rf.me, rf.state, rf.currentTerm, args.LeaderId, args.LastIncludedIndex, args.LastIncludedTerm, rf.commitIndex)
-		return
+		return nil
 	}
 	//5.通过applyCh传至service
 	applyMsg := ApplyMsg{
@@ -360,10 +360,11 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	go func(msg ApplyMsg) {
 		rf.applyCh <- msg
 	}(applyMsg)
+	return nil
 }
 
 // RequestVoteArgs
-// example RequestVote RPC arguments structure.
+// example RequestVote RPC arguments client.
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
@@ -375,7 +376,7 @@ type RequestVoteArgs struct {
 }
 
 // RequestVoteReply
-// example RequestVote RPC reply structure.
+// example RequestVote RPC reply client.
 // field names must start with capital letters!
 //
 type RequestVoteReply struct {
@@ -387,7 +388,7 @@ type RequestVoteReply struct {
 // RequestVote
 // example RequestVote RPC handler.
 //
-func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) error {
 	// Your code here (2A, 2B).
 	//无论如何,返回参数中的term应修改为自己的term
 	rf.mu.Lock()
@@ -403,7 +404,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.VoteGranted = false
 	//1.如果Term<currentTerm或者已经投过票了,则之直接返回拒绝
 	if args.Term < rf.currentTerm || (args.Term == rf.currentTerm && rf.voteFor != -1 && rf.voteFor != args.CandidateId) {
-		return
+		return nil
 	}
 	//2.如果t > currentTerm,则更新currentTerm,并切换为follower
 	if args.Term > rf.currentTerm {
@@ -421,6 +422,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		//投赞成
 		reply.VoteGranted = true
 	}
+	return nil
 }
 
 // AppendEntriesArgs 日志追加RPC的请求参数
@@ -443,7 +445,7 @@ type AppendEntriesReply struct {
 }
 
 // AppendEntries 日志追加的RPC handler
-func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) error {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer rf.persist()
@@ -458,7 +460,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Term < rf.currentTerm {
 		DPrintf("id[%d].state[%v].term[%d]: 追加日志的任期%d小于当前任期%d\n", rf.me, rf.state, rf.currentTerm, args.Term, rf.currentTerm)
 		reply.Success = false
-		return
+		return nil
 	}
 	//若请求的term大于该server的term,则更新term并且将voteFor置为未投票
 	if args.Term > rf.currentTerm {
@@ -479,14 +481,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		//记录XLen为当前最新日志的index
 		reply.XLen = rf.lastLog().Index
 		DPrintf("id[%d].state[%v].term[%d]: 追加日志的和现在的日志不匹配\n", rf.me, rf.state, rf.currentTerm)
-		return
+		return nil
 	}
 	if args.PrevLogIndex < rf.logEntries[0].Index {
 		reply.XTerm = -1
 		reply.Term = 0
 		reply.XLen = rf.logEntries[0].Index
 		reply.Success = false
-		return
+		return nil
 	}
 	//若preLogIndex处的日志的term和preLogTerm不相等(或者)
 	if rf.logEntries[0].Index <= args.PrevLogIndex && rf.index(args.PrevLogIndex).Term != args.PrevLogTerm {
@@ -496,7 +498,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		//更新XIndex为XTerm在本机log中第一个Index位置
 		reply.XIndex = rf.binaryFindFirstIndexByTerm(reply.XTerm)
 		DPrintf("id[%d].state[%v].term[%d]: 追加日志的和现在的日志不匹配\n", rf.me, rf.state, rf.currentTerm)
-		return
+		return nil
 	}
 	//追加
 	for i, logEntry := range args.Entries {
@@ -527,6 +529,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	//更新follower的commitIndex
 	rf.updateCommitIndexForFollower(args.LeaderCommit)
+	return nil
 }
 
 //最近的一个log
@@ -612,8 +615,8 @@ func (rf *Raft) resetElectTimer() {
 //
 // if you're having trouble getting RPC to work, check that you've
 // capitalized all field names in structs passed over RPC, and
-// that the caller passes the address of the reply struct with &, not
-// the struct itself.
+// that the caller passes the address of the reply client with &, not
+// the client itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	err := rf.peers[server].Call("Raft.RequestVote", args, reply)
@@ -944,14 +947,14 @@ func (rf *Raft) BoardCast() {
 		DPrintf("id[%d].state[%v].term[%d]: 开始一轮广播\n", rf.me, rf.state, rf.currentTerm)
 		for i := range rf.peers {
 			if i != rf.me {
-				go rf.HandleAppendEntries(i)
+				go rf.handleAppendEntries(i)
 			}
 		}
 	}
 }
 
-// HandleAppendEntries handle对AppendEntries的发送和返回处理
-func (rf *Raft) HandleAppendEntries(server int) {
+// handleAppendEntries handle对AppendEntries的发送和返回处理
+func (rf *Raft) handleAppendEntries(server int) {
 	rf.mu.Lock()
 	if rf.state != LEADER {
 		rf.mu.Unlock()

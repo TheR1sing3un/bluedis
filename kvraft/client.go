@@ -9,7 +9,7 @@ import "math/big"
 
 type Clerk struct {
 	servers []*rpc.Client
-	// You will have to modify this struct.
+	// You will have to modify this client.
 	lastLeader           int        //上一次RPC发现的主机id
 	mu                   sync.Mutex //锁
 	clientId             int64      //client唯一id
