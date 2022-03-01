@@ -5,6 +5,7 @@ import (
 	"github.com/gomodule/redigo/redis"
 	"github.com/peterh/liner"
 	"log"
+	"os"
 	"strings"
 	"sync"
 )
@@ -14,6 +15,7 @@ type Client struct {
 	routerIp   string
 	routerPort int
 	conn       redis.Conn
+	line       *liner.State
 }
 
 const debug = true
@@ -35,19 +37,20 @@ func NewClient(routerIp string, routerPort int) *Client {
 		return nil
 	}
 	client.conn = conn
+	client.line = liner.NewLiner()
+	//配置liner
+	client.configureLiner()
 	return client
 }
 
 func (c *Client) StartClient() {
 	defer c.conn.Close()
-	line := liner.NewLiner()
-	defer line.Close()
-	//设置Ctrl C退出确认
-	line.SetCtrlCAborts(true)
+	defer c.line.Close()
+	defer c.writeLineHistory()
 	prefix := fmt.Sprintf("%s:%d>", c.routerIp, c.routerPort)
 	for {
 		//接收消息
-		cmd, err := line.Prompt(prefix)
+		cmd, err := c.line.Prompt(prefix)
 		if err != nil {
 			fmt.Println("输入错误:", err)
 			return
@@ -57,6 +60,8 @@ func (c *Client) StartClient() {
 		if len(cmd) == 0 {
 			continue
 		}
+		//记录到命令历史中
+		c.line.AppendHistory(cmd)
 		//将消息发过去
 		if c.applyCommand(cmd) {
 			//需要关闭客户端
@@ -112,4 +117,37 @@ func parseCommand(cmd string) (cmdType string, args []interface{}) {
 	}
 	cmdType = fmt.Sprintf("%s", args[0])
 	return cmdType, args[1:]
+}
+
+func (c *Client) configureLiner() {
+	//设置Ctrl C退出确认
+	c.line.SetCtrlCAborts(true)
+	//设置命令自动补全(按Tab键)
+	c.line.SetCompleter(func(line string) (res []string) {
+		for _, cmd := range commandList {
+			//当命令列表数组中每个数组的第一个字符串,也就是命令类型,和当前终端输入的如果匹配,就加入结果集
+			if strings.HasPrefix(cmd[0], strings.ToUpper(line)) {
+				res = append(res, strings.ToLower(cmd[0]))
+			}
+		}
+		return
+	})
+	//初始化命令历史记录
+	if file, err := os.Open(history_fn); err == nil {
+		//先从文件中读取之前的历史记录
+		c.line.ReadHistory(file)
+		//关闭文件
+		file.Close()
+	}
+}
+
+//结束的时候进行命令历史的文件写入(下一次可以直接从文件中恢复)
+func (c *Client) writeLineHistory() {
+	if file, err := os.Create(history_fn); err == nil {
+		//写到文件中
+		c.line.WriteHistory(file)
+		file.Close()
+	} else {
+		c.log("error writing history file: %v\n", err)
+	}
 }
