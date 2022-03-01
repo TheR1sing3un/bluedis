@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
+	"time"
 )
 
 var address = map[int]string{
@@ -67,6 +68,7 @@ func main() {
 				delete(address, index)
 			}
 		}
+		time.Sleep(1 * time.Second)
 	}
 	fmt.Printf("已连接所有节点,开始服务\n")
 	//等节点都上线了,就开启KVServer

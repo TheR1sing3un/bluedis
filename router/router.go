@@ -3,9 +3,8 @@ package router
 import (
 	"bluedis/kvraft"
 	"fmt"
-	"io"
+	"github.com/tidwall/redcon"
 	"log"
-	"net"
 	"net/rpc"
 	"strings"
 	"sync"
@@ -14,9 +13,9 @@ import (
 type CommandType string
 
 const (
-	GET    = "GET"
+	GET    = "get"
 	APPEND = "APPEND"
-	SET    = "SET"
+	SET    = "set"
 )
 
 type Router struct {
@@ -51,90 +50,62 @@ func NewRouter(serversAddress []string, ip string, port int) (*Router, error) {
 	}
 	clerk := kvraft.MakeClerk(serverEnds)
 	router.clerk = clerk
-	fmt.Println("clientEnds:", serverEnds)
 	return router, nil
 }
 
 func (r *Router) StartRouter() {
 	//监听本机的端口
-	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", r.ip, r.port))
+	address := fmt.Sprintf("%s:%d", r.ip, r.port)
+	err := redcon.ListenAndServe(address,
+		func(conn redcon.Conn, cmd redcon.Command) {
+			r.log("接收到address: %v,command: %v", cmd, conn.Context())
+			r.handleCmd(conn, cmd)
+		},
+		func(conn redcon.Conn) bool {
+			return r.acceptConn(conn)
+		},
+		func(conn redcon.Conn, err error) {
+			r.closeConn(conn, err)
+		})
 	if err != nil {
-		log.Fatalf("监听本机: %s:%d失败,error: %v", r.ip, r.port, err)
-	}
-	defer listener.Close()
-	//开始处理消息
-	for {
-		//接收连接
-		conn, err := listener.Accept()
-		//若接收错误,跳过该连接,继续
-		if err != nil {
-			r.log("连接错误,error: %v", err)
-			continue
-		}
-		//处理连接
-		go r.handleConn(conn)
+		r.log("listener出错,error: %v", err)
 	}
 }
 
-func (r *Router) handleConn(conn net.Conn) {
-	go func() {
-		//建立缓存区,用于接收命令
-		buf := make([]byte, 4096)
-		//不断接收命令
-		for {
-			//从conn中读取客户端发的消息
-			n, err := conn.Read(buf)
-			//当n == 0的时候,代表已经不再有数据接收了
-			if n == 0 {
-				return
-			}
-			if err != nil && err != io.EOF {
-				r.log("[%v]: conn read err: %v", conn.RemoteAddr().String(), err)
-				return
-			}
-			fmt.Println("buf:", buf)
-			//提取消息(取0到n-2个,因为最后一个是'\n')
-			cmd := string(buf[:n-2])
-			fmt.Println("cmd:", cmd)
-			//处理命令
-			go r.applyCommand(cmd, conn)
-		}
-	}()
-
-}
-
-func (r *Router) applyCommand(cmd string, conn net.Conn) {
-	cmds := strings.Split(cmd, " ")
-	if len(cmds) < 1 {
-		r.log("[%v]: invalid command: %v", conn.RemoteAddr().String(), cmd)
-		return
-	}
-	fmt.Printf("type:%v;key:%v;\n", cmds[0], cmds[1])
-	fmt.Println("keyLen:", len(cmds[1]))
-	operation := cmds[0]
-	operation = strings.ToUpper(operation)
-	var reply string
-	switch operation {
-	case GET:
-		key := cmds[1]
-		value := r.clerk.Get(key)
-		reply = value
+func (r *Router) handleCmd(conn redcon.Conn, cmd redcon.Command) {
+	//将命令类型转为小写,并判断命令类型
+	switch strings.ToLower(string(cmd.Args[0])) {
 	case SET:
-		key := cmds[1]
-		value := cmds[2]
-		fmt.Println("value:", value)
-		r.clerk.Put(key, value)
-		reply = "ok"
-	case APPEND:
-		key := cmds[1]
-		value := cmds[2]
-		fmt.Println("value:", value)
-		r.clerk.Append(key, value)
-		reply = "ok"
+		//若是set命令
+		//1.判断参数个数是否正确
+		if len(cmd.Args) != 3 {
+			conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
+			return
+		}
+		//2.若正确,则应用命令
+		r.clerk.Put(string(cmd.Args[1]), string(cmd.Args[2]))
+		conn.WriteString("OK")
+	case GET:
+		//1.判断命令是否合规
+		if len(cmd.Args) != 2 {
+			conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
+			return
+		}
+		//2.若正确,则应用命令
+		value := r.clerk.Get(string(cmd.Args[1]))
+		if value == "" {
+			conn.WriteNull()
+		} else {
+			conn.WriteBulk([]byte(value))
+		}
+	default:
+		conn.WriteError("ERR unknown command '" + string(cmd.Args[0]) + "'")
 	}
-	//将reply写回到客户端
-	_, err := conn.Write([]byte(reply + "\n"))
-	if err != nil {
-		r.log("[%v]: 向该conn写数据失败,data: %v,error: %v", conn.RemoteAddr().String(), reply, err)
-	}
+}
+
+func (r *Router) acceptConn(conn redcon.Conn) bool {
+	return true
+}
+
+func (r *Router) closeConn(conn redcon.Conn, err error) {
 }

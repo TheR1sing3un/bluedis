@@ -390,7 +390,7 @@ func (kv *KVServer) StartServer(persister *raft.Persister, servers []*rpc.Client
 	//从快照中恢复数据
 	kv.readSnapshot(kv.rf.GetSnapshot())
 	go kv.receiveApplyMsg()
-	go kv.printData()
+	//go kv.printData()
 	for !kv.killed() {
 		time.Sleep(5 * time.Second)
 	}

@@ -4,6 +4,7 @@ import (
 	"bluedis/client/client"
 	"flag"
 	"fmt"
+	"github.com/peterh/liner"
 )
 
 var (
@@ -18,6 +19,8 @@ func init() {
 
 func main() {
 	flag.Parse()
+	line := liner.NewLiner()
+	defer line.Close()
 	//创建client
 	client := client.NewClient(ip, port)
 	if client == nil {
