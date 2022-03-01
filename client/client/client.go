@@ -65,7 +65,6 @@ func (c *Client) StartClient() {
 		//将消息发过去
 		if c.applyCommand(cmd) {
 			//需要关闭客户端
-			fmt.Println("bye")
 			return
 		}
 	}
@@ -74,7 +73,7 @@ func (c *Client) StartClient() {
 func (c *Client) applyCommand(cmd string) (exit bool) {
 	exit = false
 	if cmd == "quit" {
-		return true
+		exit = true
 	}
 	//解析出命令
 	command, args := parseCommand(cmd)
@@ -139,6 +138,7 @@ func (c *Client) configureLiner() {
 		//关闭文件
 		file.Close()
 	}
+
 }
 
 //结束的时候进行命令历史的文件写入(下一次可以直接从文件中恢复)

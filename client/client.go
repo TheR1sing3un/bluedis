@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/peterh/liner"
+	"io/ioutil"
 )
 
 var (
@@ -24,9 +25,14 @@ func main() {
 	//创建client
 	client := client.NewClient(ip, port)
 	if client == nil {
-		fmt.Println(">>>>>>>>>>连接服务器失败>>>>>>>>>>")
+		fmt.Println("连接服务器失败")
 		return
 	}
-	fmt.Println(">>>>>>>>>>连接服务器成功>>>>>>>>>>")
+	banner, err := ioutil.ReadFile("./client/banner.txt")
+	if err != nil {
+		fmt.Printf("open banner file error: %v\n", err)
+	} else {
+		fmt.Println(string(banner))
+	}
 	client.StartClient()
 }

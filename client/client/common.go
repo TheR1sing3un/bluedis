@@ -88,6 +88,8 @@ var commandList = [][]string{
 
 	{"MULTI", "Transaction start", "TRANSACTION"},
 	{"EXEC", "Transaction end", "TRANSACTION"},
+	{"PING"},
+	{"AUTH"},
 }
 
 //终端命令历史记录文件路径
